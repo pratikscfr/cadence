@@ -90,6 +90,11 @@ type CreateWorkflowMode int
 // QueueType is an enum that represents various queue types in persistence
 type QueueType int
 
+// ShardID is an optional shard identifier used in ExecutionManager and ExecutionStore request structs.
+// A nil value indicates the caller has not yet been updated to pass the shard ID.
+// Valid shard IDs start from 0 (i.e. 0 is a valid shard).
+type ShardID = *int
+
 // DomainReplicationQueueType queue types used in queue table
 // Use positive numbers for queue type
 // Negative numbers are reserved for DLQ
@@ -720,7 +725,7 @@ type (
 
 	// CreateWorkflowExecutionRequest is used to write a new workflow execution
 	CreateWorkflowExecutionRequest struct {
-		ShardID *int
+		ShardID ShardID
 		RangeID int64
 
 		Mode CreateWorkflowMode
@@ -741,7 +746,7 @@ type (
 
 	// GetWorkflowExecutionRequest is used to retrieve the info of a workflow execution
 	GetWorkflowExecutionRequest struct {
-		ShardID    *int
+		ShardID    ShardID
 		DomainID   string
 		Execution  types.WorkflowExecution
 		DomainName string
@@ -756,7 +761,7 @@ type (
 
 	// GetCurrentExecutionRequest is used to retrieve the current RunId for an execution
 	GetCurrentExecutionRequest struct {
-		ShardID    *int
+		ShardID    ShardID
 		DomainID   string
 		WorkflowID string
 		DomainName string
@@ -764,7 +769,7 @@ type (
 
 	// ListCurrentExecutionsRequest is request to ListCurrentExecutions
 	ListCurrentExecutionsRequest struct {
-		ShardID   *int
+		ShardID   ShardID
 		PageSize  int
 		PageToken []byte
 	}
@@ -777,7 +782,7 @@ type (
 
 	// IsWorkflowExecutionExistsRequest is used to check if the concrete execution exists
 	IsWorkflowExecutionExistsRequest struct {
-		ShardID    *int
+		ShardID    ShardID
 		DomainID   string
 		DomainName string
 		WorkflowID string
@@ -786,7 +791,7 @@ type (
 
 	// ListConcreteExecutionsRequest is request to ListConcreteExecutions
 	ListConcreteExecutionsRequest struct {
-		ShardID   *int
+		ShardID   ShardID
 		PageSize  int
 		PageToken []byte
 	}
@@ -819,7 +824,7 @@ type (
 
 	// UpdateWorkflowExecutionRequest is used to update a workflow execution
 	UpdateWorkflowExecutionRequest struct {
-		ShardID *int
+		ShardID ShardID
 		RangeID int64
 
 		Mode UpdateWorkflowMode
@@ -837,7 +842,7 @@ type (
 
 	// ConflictResolveWorkflowExecutionRequest is used to reset workflow execution state for a single run
 	ConflictResolveWorkflowExecutionRequest struct {
-		ShardID *int
+		ShardID ShardID
 		RangeID int64
 
 		Mode ConflictResolveWorkflowMode
@@ -926,7 +931,7 @@ type (
 
 	// DeleteWorkflowExecutionRequest is used to delete a workflow execution
 	DeleteWorkflowExecutionRequest struct {
-		ShardID    *int
+		ShardID    ShardID
 		DomainID   string
 		WorkflowID string
 		RunID      string
@@ -935,7 +940,7 @@ type (
 
 	// DeleteCurrentWorkflowExecutionRequest is used to delete the current workflow execution
 	DeleteCurrentWorkflowExecutionRequest struct {
-		ShardID    *int
+		ShardID    ShardID
 		DomainID   string
 		WorkflowID string
 		RunID      string
@@ -944,7 +949,7 @@ type (
 
 	// PutReplicationTaskToDLQRequest is used to put a replication task to dlq
 	PutReplicationTaskToDLQRequest struct {
-		ShardID           *int
+		ShardID           ShardID
 		SourceClusterName string
 		TaskInfo          *ReplicationTaskInfo
 		DomainName        string
@@ -952,7 +957,7 @@ type (
 
 	// GetReplicationTasksFromDLQRequest is used to get replication tasks from dlq
 	GetReplicationTasksFromDLQRequest struct {
-		ShardID           *int
+		ShardID           ShardID
 		SourceClusterName string
 		ReadLevel         int64
 		MaxReadLevel      int64
@@ -962,20 +967,20 @@ type (
 
 	// GetReplicationDLQSizeRequest is used to get one replication task from dlq
 	GetReplicationDLQSizeRequest struct {
-		ShardID           *int
+		ShardID           ShardID
 		SourceClusterName string
 	}
 
 	// DeleteReplicationTaskFromDLQRequest is used to delete replication task from DLQ
 	DeleteReplicationTaskFromDLQRequest struct {
-		ShardID           *int
+		ShardID           ShardID
 		SourceClusterName string
 		TaskID            int64
 	}
 
 	// RangeDeleteReplicationTaskFromDLQRequest is used to delete replication tasks from DLQ
 	RangeDeleteReplicationTaskFromDLQRequest struct {
-		ShardID              *int
+		ShardID              ShardID
 		SourceClusterName    string
 		InclusiveBeginTaskID int64
 		ExclusiveEndTaskID   int64
@@ -994,7 +999,7 @@ type (
 
 	// GetHistoryTasksRequest is used to get history tasks
 	GetHistoryTasksRequest struct {
-		ShardID             *int
+		ShardID             ShardID
 		TaskCategory        HistoryTaskCategory
 		InclusiveMinTaskKey HistoryTaskKey
 		ExclusiveMaxTaskKey HistoryTaskKey
@@ -1010,14 +1015,14 @@ type (
 
 	// CompleteHistoryTaskRequest is used to complete a history task
 	CompleteHistoryTaskRequest struct {
-		ShardID      *int
+		ShardID      ShardID
 		TaskCategory HistoryTaskCategory
 		TaskKey      HistoryTaskKey
 	}
 
 	// RangeCompleteHistoryTaskRequest is used to complete a range of history tasks
 	RangeCompleteHistoryTaskRequest struct {
-		ShardID             *int
+		ShardID             ShardID
 		TaskCategory        HistoryTaskCategory
 		InclusiveMinTaskKey HistoryTaskKey
 		ExclusiveMaxTaskKey HistoryTaskKey
@@ -1571,7 +1576,7 @@ type (
 
 	// CreateFailoverMarkersRequest is request to create failover markers
 	CreateFailoverMarkersRequest struct {
-		ShardID          *int
+		ShardID          ShardID
 		RangeID          int64
 		Markers          []*FailoverMarkerTask
 		CurrentTimeStamp time.Time
