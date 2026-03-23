@@ -136,8 +136,8 @@ type (
 		ListCurrentExecutions(ctx context.Context, request *ListCurrentExecutionsRequest) (*ListCurrentExecutionsResponse, error)
 
 		// Active cluster selection policy related methods
-		GetActiveClusterSelectionPolicy(ctx context.Context, domainID, wfID, rID string) (*DataBlob, error)
-		DeleteActiveClusterSelectionPolicy(ctx context.Context, domainID, wfID, rID string) error
+		GetActiveClusterSelectionPolicy(ctx context.Context, request *GetActiveClusterSelectionPolicyRequest) (*DataBlob, error)
+		DeleteActiveClusterSelectionPolicy(ctx context.Context, request *DeleteActiveClusterSelectionPolicyRequest) error
 	}
 
 	// HistoryStore is to manager workflow history events
