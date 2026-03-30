@@ -183,6 +183,8 @@ func (p *namespaceProcessor) runProcess(ctx context.Context) {
 
 // runRebalancingLoop handles shard assignment and redistribution.
 func (p *namespaceProcessor) runRebalancingLoop(ctx context.Context) {
+	// Buffered channel to allow one pending rebalance trigger.
+	triggerChan := make(chan string, 1)
 
 	// Perform an initial rebalance on startup.
 	err := p.rebalanceShards(ctx)
@@ -190,8 +192,7 @@ func (p *namespaceProcessor) runRebalancingLoop(ctx context.Context) {
 		p.logger.Error("initial rebalance failed", tag.Error(err))
 	}
 
-	updateChan, err := p.runRebalanceTriggeringLoop(ctx)
-	if err != nil {
+	if err := p.runRebalanceTriggeringLoop(ctx, triggerChan); err != nil {
 		p.logger.Error("failed to start rebalance triggering loop", tag.Error(err))
 		return
 	}
@@ -201,19 +202,27 @@ func (p *namespaceProcessor) runRebalancingLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			p.logger.Info("Rebalancing loop cancelled.")
+			p.logger.Info("Rebalancing loop cancelled")
 			return
 
-		case update := <-updateChan:
+		case triggerReason := <-triggerChan:
 			// If an update comes in before the cooldown has expired,
 			// we wait until the cooldown has passed since the last rebalance before processing it.
 			// This ensures that we don't rebalance too frequently in response to a flurry of updates
 			p.timeSource.Sleep(nextRebalanceAllowedAt.Sub(p.timeSource.Now()))
 			nextRebalanceAllowedAt = p.timeSource.Now().Add(p.cfg.RebalanceCooldown)
 
-			p.logger.Info("Rebalancing triggered", tag.Dynamic("reason", update))
+			p.logger.Info("Rebalancing triggered", tag.Dynamic("triggerReason", triggerReason))
 			if err := p.rebalanceShards(ctx); err != nil {
 				p.logger.Error("rebalance failed", tag.Error(err))
+
+				// If rebalance fails, we want to trigger another rebalance ASAP,
+				// but with a cooldown to avoid rebalance storms if the underlying issue is persistent.
+				select {
+				case triggerChan <- "Previous rebalance failed":
+				default:
+					// If the channel is full, we skip sending the update to avoid blocking the loop.
+				}
 			}
 		}
 	}
@@ -221,23 +230,18 @@ func (p *namespaceProcessor) runRebalancingLoop(ctx context.Context) {
 
 // runRebalanceTriggeringLoop monitors for state changes and periodic triggers to initiate rebalancing.
 // it doesn't block Subscribe calls to avoid a growing backlog of updates.
-func (p *namespaceProcessor) runRebalanceTriggeringLoop(ctx context.Context) (<-chan string, error) {
-	// Buffered channel to allow one pending rebalance trigger.
-	triggerChan := make(chan string, 1)
-
+func (p *namespaceProcessor) runRebalanceTriggeringLoop(ctx context.Context, triggerChan chan<- string) error {
 	updateChan, err := p.shardStore.SubscribeToExecutorStatusChanges(ctx, p.namespaceCfg.Name)
 	if err != nil {
 		p.logger.Error("Failed to subscribe to state changes, stopping rebalancing loop.", tag.Error(err))
-		return nil, err
+		return err
 	}
 
 	go p.rebalanceTriggeringLoop(ctx, updateChan, triggerChan)
-	return triggerChan, nil
+	return nil
 }
 
 func (p *namespaceProcessor) rebalanceTriggeringLoop(ctx context.Context, updateChan <-chan int64, triggerChan chan<- string) {
-	defer close(triggerChan)
-
 	ticker := p.timeSource.NewTicker(p.cfg.Period)
 	defer ticker.Stop()
 
@@ -416,7 +420,7 @@ func (p *namespaceProcessor) rebalanceShardsImpl(ctx context.Context, metricsLoo
 
 	activeExecutors := p.getActiveExecutors(namespaceState, staleExecutors)
 	if len(activeExecutors) == 0 {
-		p.logger.Info("No active executors found. Cannot assign shards.")
+		p.logger.Error("No active executors found. Cannot assign shards.")
 
 		// Cleanup stale executors even if no active executors remain
 		if len(staleExecutors) > 0 {
@@ -430,14 +434,20 @@ func (p *namespaceProcessor) rebalanceShardsImpl(ctx context.Context, metricsLoo
 	p.logger.Info("Active executors", tag.ShardExecutors(activeExecutors))
 
 	deletedShards := p.findDeletedShards(namespaceState)
+	if len(deletedShards) > 0 {
+		p.logger.Info("Identified deleted shards", tag.ShardExecutors(slices.Collect(maps.Keys(deletedShards))))
+	}
+	metricsLoopScope.AddCounter(metrics.ShardDistributorAssignLoopDeletedShards, int64(len(deletedShards)))
+
 	shardsToReassign, currentAssignments := p.findShardsToReassign(activeExecutors, namespaceState, deletedShards, staleExecutors)
 
-	metricsLoopScope.UpdateGauge(metrics.ShardDistributorAssignLoopNumRebalancedShards, float64(len(shardsToReassign)))
+	metricsLoopScope.AddCounter(metrics.ShardDistributorAssignLoopNumRebalancedShards, int64(len(shardsToReassign)))
 
 	// If there are deleted shards or stale executors, the distribution has changed.
 	assignedToEmptyExecutors := assignShardsToEmptyExecutors(currentAssignments)
 	updatedAssignments := p.updateAssignments(shardsToReassign, activeExecutors, currentAssignments)
-	isRebalancedByShardLoad := p.rebalanceByShardLoad(calcShardLoad(namespaceState), currentAssignments)
+	isRebalancedByShardLoad := p.rebalanceByShardLoad(calcShardLoad(namespaceState), currentAssignments, metricsLoopScope)
+	p.emitExecutorMetric(namespaceState, metricsLoopScope)
 
 	distributionChanged := len(deletedShards) > 0 || len(staleExecutors) > 0 || assignedToEmptyExecutors || updatedAssignments || isRebalancedByShardLoad
 	if !distributionChanged {
@@ -447,7 +457,6 @@ func (p *namespaceProcessor) rebalanceShardsImpl(ctx context.Context, metricsLoo
 
 	newState := p.getNewAssignmentsState(namespaceState, currentAssignments)
 
-	p.emitExecutorMetric(namespaceState, metricsLoopScope)
 	p.emitOldestExecutorHeartbeatLag(namespaceState, metricsLoopScope)
 
 	if p.sdConfig.GetMigrationMode(p.namespaceCfg.Name) != types.MigrationModeONBOARDED {
@@ -595,7 +604,7 @@ func calcShardLoad(namespaceState *store.NamespaceState) map[string]float64 {
 
 // rebalanceByShardLoad does a rebalance if a difference between hottest and coldest executors' loads is more than maxDeviation
 // in this case the hottest shard will be moved to the coldest executor
-func (p *namespaceProcessor) rebalanceByShardLoad(shardLoad map[string]float64, currentAssignments map[string][]string) (distributedChanged bool) {
+func (p *namespaceProcessor) rebalanceByShardLoad(shardLoad map[string]float64, currentAssignments map[string][]string, metricsScope metrics.Scope) (distributedChanged bool) {
 	// no rebalance if there are no more than 1 executor
 	if len(currentAssignments) < 2 {
 		return false
@@ -648,6 +657,20 @@ func (p *namespaceProcessor) rebalanceByShardLoad(shardLoad map[string]float64, 
 	if coldestExecutorLoad+hottestShardLoad >= hottestExecutorLoad {
 		return false
 	}
+
+	p.logger.Info("Load-based shard move",
+		tag.ShardKey(hottestShardID),
+		tag.ShardExecutor(hottestExecutorID),
+		tag.Dynamic("destination_executor", coldestExecutorID),
+		tag.ShardLoad(fmt.Sprintf("%f", hottestShardLoad)),
+		tag.Dynamic("hottest_executor_load", hottestExecutorLoad),
+		tag.Dynamic("coldest_executor_load", coldestExecutorLoad),
+		tag.Dynamic("load_ratio", hottestExecutorLoad/coldestExecutorLoad),
+		tag.Dynamic("hottest_executor_shard_count", len(currentAssignments[hottestExecutorID])),
+		tag.Dynamic("coldest_executor_shard_count", len(currentAssignments[coldestExecutorID])),
+	)
+	metricsScope.AddCounter(metrics.ShardDistributorAssignLoopLoadBasedMoves, 1)
+	metricsScope.UpdateGauge(metrics.ShardDistributorAssignLoopMovedShardLoad, hottestShardLoad)
 
 	// remove the hottest Shard from the hottest executor
 	// put it to the coldest executor

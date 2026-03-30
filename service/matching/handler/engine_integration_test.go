@@ -77,6 +77,7 @@ type (
 		mockMembershipResolver         *membership.MockResolver
 		mockIsolationStore             *dynamicconfig.MockClient
 		mockShardExecutorClient        *executorclient.MockClient
+		mockExecutor                   *executorclient.MockExecutor[tasklist.ShardProcessor]
 		ShardDistributorMatchingConfig clientcommon.Config
 
 		matchingEngine       *matchingEngineImpl
@@ -160,13 +161,14 @@ func (s *matchingEngineSuite) SetupTest() {
 		context.Background(),
 		matchingTestDomainName,
 		&types.TaskList{Name: matchingTestTaskList, Kind: &tlKindNormal},
-		metrics.NewClient(tally.NoopScope, metrics.Matching, metrics.HistogramMigration{}),
+		metrics.NewClient(tally.NoopScope, metrics.Matching, metrics.MigrationConfig{}),
 		metrics.MatchingTaskListMgrScope,
 		testlogger.New(s.Suite.T()),
 	)
 	s.mockActiveClusterMgr = *activecluster.NewMockManager(s.controller)
 
 	s.matchingEngine = s.newMatchingEngine(defaultTestConfig(), s.taskManager)
+	s.mockExecutor = s.matchingEngine.executor.(*executorclient.MockExecutor[tasklist.ShardProcessor])
 	s.matchingEngine.Start()
 }
 
@@ -179,14 +181,14 @@ func (s *matchingEngineSuite) TearDownTest() {
 func (s *matchingEngineSuite) newMatchingEngine(
 	config *config.Config, taskMgr persistence.TaskManager,
 ) *matchingEngineImpl {
-	return NewEngine(
+	e := NewEngine(
 		taskMgr,
 		cluster.GetTestClusterMetadata(true),
 		s.mockHistoryClient,
 		s.mockMatchingClient,
 		config,
 		s.logger,
-		metrics.NewClient(tally.NoopScope, metrics.Matching, metrics.HistogramMigration{}),
+		metrics.NewClient(tally.NoopScope, metrics.Matching, metrics.MigrationConfig{}),
 		tally.NoopScope,
 		s.mockDomainCache,
 		s.mockMembershipResolver,
@@ -194,7 +196,15 @@ func (s *matchingEngineSuite) newMatchingEngine(
 		s.mockTimeSource,
 		s.mockShardExecutorClient,
 		defaultSDExecutorConfig(),
+		nil,
 	).(*matchingEngineImpl)
+	// Replace the real executor with a mock that behaves as a fully onboarded SD executor.
+	mockExec := executorclient.NewMockExecutor[tasklist.ShardProcessor](s.controller)
+	mockExec.EXPECT().GetShardProcess(gomock.Any(), gomock.Any()).Return(&tasklist.MockShardProcessor{}, nil).AnyTimes()
+	mockExec.EXPECT().Start(gomock.Any()).AnyTimes()
+	mockExec.EXPECT().Stop().AnyTimes()
+	e.executor = mockExec
+	return e
 }
 
 func (s *matchingEngineSuite) TestPollForActivityTasksEmptyResult() {
@@ -236,8 +246,8 @@ func (s *matchingEngineSuite) TestOnlyUnloadMatchingInstance() {
 		ClusterMetadata: s.matchingEngine.clusterMetadata,
 		IsolationState:  s.matchingEngine.isolationState,
 		MatchingClient:  s.matchingEngine.matchingClient,
-		Registry:        s.matchingEngine, // Engine implements ManagerRegistry
-		TaskList:        taskListID,       // same taskListID as above
+		Registry:        s.matchingEngine.taskListRegistry,
+		TaskList:        taskListID, // same taskListID as above
 		TaskListKind:    tlKind,
 		Cfg:             s.matchingEngine.config,
 		TimeSource:      s.matchingEngine.timeSource,
@@ -689,7 +699,7 @@ func (s *matchingEngineSuite) SyncMatchTasks(taskType int, enableIsolation bool)
 	s.matchingEngine.config.MinTaskThrottlingBurstSize = dynamicproperties.GetIntPropertyFilteredByTaskListInfo(_minBurst)
 	// So we can get snapshots
 	scope := tally.NewTestScope("test", nil)
-	s.matchingEngine.metricsClient = metrics.NewClient(scope, metrics.Matching, metrics.HistogramMigration{})
+	s.matchingEngine.metricsClient = metrics.NewClient(scope, metrics.Matching, metrics.MigrationConfig{})
 
 	testParam := newTestParam(s.T(), taskType)
 	s.taskManager.SetRangeID(testParam.TaskListID, initialRangeID)
@@ -848,7 +858,7 @@ func (s *matchingEngineSuite) ConcurrentAddAndPollTasks(taskType int, workerCoun
 		}
 	}
 	scope := tally.NewTestScope("test", nil)
-	s.matchingEngine.metricsClient = metrics.NewClient(scope, metrics.Matching, metrics.HistogramMigration{})
+	s.matchingEngine.metricsClient = metrics.NewClient(scope, metrics.Matching, metrics.MigrationConfig{})
 
 	const initialRangeID = 0
 	const rangeSize = 3
@@ -1422,7 +1432,7 @@ func defaultSDExecutorConfig() clientcommon.Config {
 		Namespaces: []clientcommon.NamespaceConfig{{
 			Namespace:         "cadence-matching",
 			HeartBeatInterval: 1 * time.Second,
-			MigrationMode:     sdconfig.MigrationModeLOCALPASSTHROUGH,
+			MigrationMode:     sdconfig.MigrationModeONBOARDED,
 			TTLShard:          5 * time.Minute,
 			TTLReport:         1 * time.Minute,
 		}},
