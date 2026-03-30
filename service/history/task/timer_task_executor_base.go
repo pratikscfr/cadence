@@ -267,6 +267,7 @@ func (t *timerTaskExecutorBase) deleteWorkflowExecution(
 			WorkflowID: task.WorkflowID,
 			RunID:      task.RunID,
 			DomainName: domainName,
+			ShardID:    common.IntPtr(t.shard.GetShardID()),
 		})
 	}
 	return t.throttleRetry.Do(ctx, op)
@@ -286,6 +287,7 @@ func (t *timerTaskExecutorBase) deleteCurrentWorkflowExecution(
 			WorkflowID: task.WorkflowID,
 			RunID:      task.RunID,
 			DomainName: domainName,
+			ShardID:    common.IntPtr(t.shard.GetShardID()),
 		})
 	}
 	return t.throttleRetry.Do(ctx, op)
@@ -300,6 +302,7 @@ func (t *timerTaskExecutorBase) deleteActiveClusterSelectionPolicy(
 			DomainID:   task.DomainID,
 			WorkflowID: task.WorkflowID,
 			RunID:      task.RunID,
+			ShardID:    common.IntPtr(t.shard.GetShardID()),
 		})
 	}
 	return t.throttleRetry.Do(ctx, op)

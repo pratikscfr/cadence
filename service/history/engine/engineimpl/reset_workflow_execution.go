@@ -88,6 +88,7 @@ func (e *historyEngineImpl) ResetWorkflowExecution(
 		DomainID:   domainID,
 		WorkflowID: request.WorkflowExecution.GetWorkflowID(),
 		DomainName: domainName,
+		ShardID:    common.IntPtr(e.shard.GetShardID()),
 	})
 	if err != nil {
 		return nil, err

@@ -615,6 +615,7 @@ func (s *contextImpl) GetWorkflowExecution(
 	request *persistence.GetWorkflowExecutionRequest,
 ) (*persistence.GetWorkflowExecutionResponse, error) {
 	request.RangeID = atomic.LoadInt64(&s.rangeID) // This is to make sure read is not blocked by write, s.rangeID is synced with s.shardInfo.RangeID
+	request.ShardID = common.IntPtr(s.shardID)
 	if err := s.closedError(); err != nil {
 		return nil, err
 	}
@@ -664,6 +665,7 @@ func (s *contextImpl) CreateWorkflowExecution(
 	}
 	currentRangeID := s.getRangeID()
 	request.RangeID = currentRangeID
+	request.ShardID = common.IntPtr(s.shardID)
 
 	response, err := s.executionManager.CreateWorkflowExecution(ctx, request)
 	switch err.(type) {
@@ -769,6 +771,7 @@ func (s *contextImpl) UpdateWorkflowExecution(
 	}
 	currentRangeID := s.getRangeID()
 	request.RangeID = currentRangeID
+	request.ShardID = common.IntPtr(s.shardID)
 
 	resp, err := s.executionManager.UpdateWorkflowExecution(ctx, request)
 	switch err.(type) {
@@ -880,6 +883,7 @@ func (s *contextImpl) ConflictResolveWorkflowExecution(
 	}
 	currentRangeID := s.getRangeID()
 	request.RangeID = currentRangeID
+	request.ShardID = common.IntPtr(s.shardID)
 	resp, err := s.executionManager.ConflictResolveWorkflowExecution(ctx, request)
 	switch err.(type) {
 	case nil:
@@ -1433,6 +1437,7 @@ func (s *contextImpl) ReplicateFailoverMarkers(
 		&persistence.CreateFailoverMarkersRequest{
 			RangeID: s.getRangeID(),
 			Markers: markers,
+			ShardID: common.IntPtr(s.shardID),
 		},
 	)
 	switch err.(type) {

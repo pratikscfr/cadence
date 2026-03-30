@@ -527,6 +527,7 @@ func (t *timerQueueProcessorBase) getTimerTasks(readLevel, maxReadLevel task.Key
 		ExclusiveMaxTaskKey: persistence.NewHistoryTaskKey(maxReadLevel.(timerTaskKey).visibilityTimestamp, 0),
 		PageSize:            batchSize,
 		NextPageToken:       nextPageToken,
+		ShardID:             common.IntPtr(t.shard.GetShardID()),
 	}
 
 	var response *persistence.GetHistoryTasksResponse
