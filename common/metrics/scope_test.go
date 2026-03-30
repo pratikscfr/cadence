@@ -29,22 +29,37 @@ func TestHistogramMode(t *testing.T) {
 	})
 
 	HistogramMigrationMetrics = map[string]struct{}{
-		findName(CadenceLatency):                    {},
-		findName(ExponentialReplicationTaskLatency): {},
-		findName(PersistenceLatencyPerShard):        {},
-		findName(ExponentialTaskProcessingLatency):  {},
-		findName(PersistenceLatency):                {},
-		findName(PersistenceLatencyHistogram):       {},
+		findName(CadenceLatency):                            {},
+		findName(ExponentialReplicationTaskLatency):         {},
+		findName(PersistenceLatencyPerShard):                {},
+		findName(ExponentialTaskProcessingLatency):          {},
+		findName(PersistenceLatency):                        {},
+		findName(PersistenceLatencyHistogram):               {},
+		findName(PersistenceLatencyHistogramPerHost):        {},
+		findName(TaskAttemptTimer):                          {},
+		findName(ExponentialTaskAttemptCounts):              {},
+		findName(TaskQueueLatency):                          {},
+		findName(ExponentialTaskQueueLatency):               {},
+		findName(TaskLatencyPerDomain):                      {},
+		findName(ExponentialTaskLatencyPerDomain):           {},
+		findName(TaskAttemptTimerPerDomain):                 {},
+		findName(ExponentialTaskAttemptCountsPerDomain):     {},
+		findName(TaskProcessingLatencyPerDomain):            {},
+		findName(ExponentialTaskProcessingLatencyPerDomain): {},
+		findName(TaskQueueLatencyPerDomain):                 {},
+		findName(ExponentialTaskQueueLatencyPerDomain):      {},
 	}
 
-	c := NewClient(ts, History, HistogramMigration{
-		// Default: ..., left at default value
-		Names: map[string]bool{
-			findName(CadenceLatency):                    true,  // timer type
-			findName(ExponentialReplicationTaskLatency): false, // histogram type
+	c := NewClient(ts, History, MigrationConfig{
+		Histogram: HistogramMigration{
+			// Default: ..., left at default value
+			Names: map[string]bool{
+				findName(CadenceLatency):                    true,  // timer type
+				findName(ExponentialReplicationTaskLatency): false, // histogram type
 
-			findName(PersistenceLatencyPerShard):       false, // timer type
-			findName(ExponentialTaskProcessingLatency): true,  // histogram type
+				findName(PersistenceLatencyPerShard):       false, // timer type
+				findName(ExponentialTaskProcessingLatency): true,  // histogram type
+			},
 		},
 	})
 	scope := c.Scope(HistoryDescribeQueueScope) // scope doesn't matter for this test

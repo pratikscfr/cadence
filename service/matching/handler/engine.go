@@ -67,6 +67,10 @@ const (
 	// _defaultSDReportTTL is the default TTL for shard status reports from matching executor to shard distributor.
 	// This controls how frequently the executor reports its shard load/status to the distributor.
 	_defaultSDReportTTL = 1 * time.Minute
+	// _recordTaskStartedTimeout is the maximum time allowed for RecordDecisionTaskStarted or RecordActivityTaskStarted
+	// Any time we spend attempting to start an individual task is blocking that poller from starting a different task.
+	// If a task is taking too long we'd rather try other tasks to maintain higher throughput.
+	_recordTaskStartedTimeout = time.Second
 )
 
 // Implements matching.Engine
@@ -89,7 +93,7 @@ type (
 
 	matchingEngineImpl struct {
 		taskListCreationLock           sync.Mutex
-		taskListsRegistry              tasklist.ManagerRegistry
+		taskListRegistry               tasklist.TaskListRegistry
 		shutdownCompletion             *sync.WaitGroup
 		shutdown                       chan struct{}
 		taskManager                    persistence.TaskManager
@@ -111,11 +115,12 @@ type (
 		timeSource                     clock.TimeSource
 		failoverNotificationVersion    int64
 		ShardDistributorMatchingConfig clientcommon.Config
+		drainObserver                  clientcommon.DrainSignalObserver
 	}
 )
 
 var (
-	historyServiceOperationRetryPolicy = common.CreateHistoryServiceRetryPolicy()
+	recordTaskStartedRetryPolicy = common.CreateRecordTaskStartedRetryPolicy()
 
 	errPumpClosed = errors.New("task list pump closed its channel")
 
@@ -140,9 +145,10 @@ func NewEngine(
 	timeSource clock.TimeSource,
 	shardDistributorClient executorclient.Client,
 	ShardDistributorMatchingConfig clientcommon.Config,
+	drainObserver clientcommon.DrainSignalObserver,
 ) Engine {
 	e := &matchingEngineImpl{
-		taskListsRegistry:              tasklist.NewManagerRegistry(metricsClient),
+		taskListRegistry:               tasklist.NewTaskListRegistry(metricsClient),
 		shutdown:                       make(chan struct{}),
 		shutdownCompletion:             &sync.WaitGroup{},
 		taskManager:                    taskManager,
@@ -161,6 +167,7 @@ func NewEngine(
 		isolationState:                 isolationState,
 		timeSource:                     timeSource,
 		ShardDistributorMatchingConfig: ShardDistributorMatchingConfig,
+		drainObserver:                  drainObserver,
 	}
 
 	e.setupExecutor(shardDistributorClient)
@@ -179,7 +186,7 @@ func (e *matchingEngineImpl) Stop() {
 	close(e.shutdown)
 	e.executor.Stop()
 	// Executes Stop() on each task list outside of lock
-	for _, l := range e.taskListsRegistry.AllManagers() {
+	for _, l := range e.taskListRegistry.AllManagers() {
 		l.Stop()
 	}
 	e.unregisterDomainFailoverCallback()
@@ -187,10 +194,25 @@ func (e *matchingEngineImpl) Stop() {
 }
 
 func (e *matchingEngineImpl) setupExecutor(shardDistributorExecutorClient executorclient.Client) {
+	// If no shard-distributor namespaces are configured, use a no-op executor so that
+	// the matching service falls back to local hash-ring assignment entirely.
+	if len(e.ShardDistributorMatchingConfig.Namespaces) == 0 {
+		e.logger.Info("No shard-distributor-matching namespaces configured, using no-op executor")
+		e.executor = executorclient.NewNoopExecutor[tasklist.ShardProcessor]()
+
+		taskListFactory := &tasklist.ShardProcessorFactory{
+			TaskListsRegistry: e.taskListRegistry,
+			ReportTTL:         _defaultSDReportTTL,
+			TimeSource:        e.timeSource,
+		}
+		e.taskListsFactory = taskListFactory
+		return
+	}
+
 	cfg, reportTTL := e.getValidatedShardDistributorConfig()
 
 	taskListFactory := &tasklist.ShardProcessorFactory{
-		TaskListsRegistry: e.taskListsRegistry,
+		TaskListsRegistry: e.taskListRegistry,
 		ReportTTL:         reportTTL,
 		TimeSource:        e.timeSource,
 	}
@@ -215,6 +237,7 @@ func (e *matchingEngineImpl) setupExecutor(shardDistributorExecutorClient execut
 			"grpc":     fmt.Sprintf("%d", e.config.RPCConfig.GRPCPort),
 			"hostIP":   hostIP.String(),
 		},
+		DrainObserver: e.drainObserver,
 	}
 	executor, err := executorclient.NewExecutor[tasklist.ShardProcessor](params)
 	if err != nil {
@@ -243,7 +266,7 @@ func (e *matchingEngineImpl) String() string {
 	// Executes taskList.String() on each task list outside of lock
 	buf := new(bytes.Buffer)
 
-	for i, tl := range e.taskListsRegistry.AllManagers() {
+	for i, tl := range e.taskListRegistry.AllManagers() {
 		if i >= 1000 {
 			break
 		}
@@ -255,16 +278,23 @@ func (e *matchingEngineImpl) String() string {
 // Returns taskListManager for a task list. If not already cached gets new range from DB and
 // if successful creates one.
 func (e *matchingEngineImpl) getOrCreateTaskListManager(ctx context.Context, taskList *tasklist.Identifier, taskListKind types.TaskListKind) (tasklist.Manager, error) {
-	// We have a shard-processor shared by all the task lists with the same name.
-	// For now there is no 1:1 mapping between shards and tasklists. (#tasklists >= #shards)
-	sp, _ := e.executor.GetShardProcess(ctx, taskList.GetName())
-	if sp != nil {
-		// The first check is an optimization so almost all requests will have a task list manager
-		// and return avoiding the write lock
-		if result, ok := e.taskListsRegistry.ManagerByTaskListIdentifier(*taskList); ok {
+	// The first check is an optimization so almost all requests will have a task list manager
+	// and return avoiding the write lock
+	result, ok := e.taskListRegistry.ManagerByTaskListIdentifier(*taskList)
+	excludedFromShardDistributor := e.isExcludedFromShardDistributor(taskList.GetName())
+
+	// Task lists excluded from the ShardDistributor (short-lived task lists with UUIDs) bypass
+	// the executor/shard-processor entirely and always use local hash-ring assignment.
+	if excludedFromShardDistributor && ok {
+		return result, nil
+	}
+	if !excludedFromShardDistributor {
+		sp, _ := e.executor.GetShardProcess(ctx, taskList.GetName())
+		if sp != nil && ok {
 			return result, nil
 		}
 	}
+
 	err := e.errIfShardOwnershipLost(ctx, taskList)
 	if err != nil {
 		return nil, err
@@ -272,7 +302,7 @@ func (e *matchingEngineImpl) getOrCreateTaskListManager(ctx context.Context, tas
 
 	// If it gets here, write lock and check again in case a task list is created between the two locks
 	e.taskListCreationLock.Lock()
-	if result, ok := e.taskListsRegistry.ManagerByTaskListIdentifier(*taskList); ok {
+	if result, ok := e.taskListRegistry.ManagerByTaskListIdentifier(*taskList); ok {
 		e.taskListCreationLock.Unlock()
 		return result, nil
 	}
@@ -293,7 +323,7 @@ func (e *matchingEngineImpl) getOrCreateTaskListManager(ctx context.Context, tas
 		ClusterMetadata: e.clusterMetadata,
 		IsolationState:  e.isolationState,
 		MatchingClient:  e.matchingClient,
-		Registry:        e.taskListsRegistry,
+		Registry:        e.taskListRegistry,
 		TaskList:        taskList,
 		TaskListKind:    taskListKind,
 		Cfg:             e.config,
@@ -308,23 +338,13 @@ func (e *matchingEngineImpl) getOrCreateTaskListManager(ctx context.Context, tas
 		return nil, err
 	}
 
-	e.taskListsRegistry.Register(*taskList, mgr)
+	e.taskListRegistry.Register(*taskList, mgr)
 	e.taskListCreationLock.Unlock()
 
 	err = mgr.Start(context.Background())
 	if err != nil {
 		logger.Info("Task list manager state changed", tag.LifeCycleStartFailed, tag.Error(err))
 		return nil, err
-	}
-
-	// If the ShardDistributor is not responsible for the shard assignment, the assignment is handled by the local logic
-	if !e.executor.IsOnboardedToSD() {
-		err = e.executor.AssignShardsFromLocalLogic(ctx, map[string]*types.ShardAssignment{
-			taskList.GetName(): {Status: types.AssignmentStatusREADY},
-		})
-		if err != nil {
-			logger.Error("Error in local assignment", tag.Error(err))
-		}
 	}
 
 	logger.Info("Task list manager state changed", tag.LifeCycleStarted)
@@ -1098,7 +1118,7 @@ func (e *matchingEngineImpl) getTaskListsByDomainAndKind(domainID string, taskLi
 	decisionTaskListMap := make(map[string]*types.DescribeTaskListResponse)
 	activityTaskListMap := make(map[string]*types.DescribeTaskListResponse)
 
-	for _, tlm := range e.taskListsRegistry.ManagersByDomainID(domainID) {
+	for _, tlm := range e.taskListRegistry.ManagersByDomainID(domainID) {
 		if taskListKind == nil || tlm.GetTaskListKind() == *taskListKind {
 			tl := tlm.TaskListID()
 			if types.TaskListType(tl.GetType()) == types.TaskListTypeDecision {
@@ -1237,7 +1257,7 @@ func (e *matchingEngineImpl) getAllPartitions(
 }
 
 func (e *matchingEngineImpl) unloadTaskList(tlMgr tasklist.Manager) {
-	unregistered := e.taskListsRegistry.Unregister(tlMgr)
+	unregistered := e.taskListRegistry.Unregister(tlMgr)
 	if unregistered {
 		tlMgr.Stop()
 	}
@@ -1366,8 +1386,10 @@ func (e *matchingEngineImpl) recordDecisionTaskStarted(
 		return err
 	}
 	throttleRetry := backoff.NewThrottleRetry(
-		backoff.WithRetryPolicy(historyServiceOperationRetryPolicy),
+		backoff.WithRetryPolicy(recordTaskStartedRetryPolicy),
 		backoff.WithRetryableError(isMatchingRetryableError),
+		backoff.WithOperationTimeout(_recordTaskStartedTimeout),
+		backoff.WithContextExpiration(),
 	)
 	err := throttleRetry.Do(ctx, op)
 	return resp, err
@@ -1393,8 +1415,10 @@ func (e *matchingEngineImpl) recordActivityTaskStarted(
 		return err
 	}
 	throttleRetry := backoff.NewThrottleRetry(
-		backoff.WithRetryPolicy(historyServiceOperationRetryPolicy),
+		backoff.WithRetryPolicy(recordTaskStartedRetryPolicy),
 		backoff.WithRetryableError(isMatchingRetryableError),
+		backoff.WithOperationTimeout(_recordTaskStartedTimeout),
+		backoff.WithContextExpiration(),
 	)
 	err := throttleRetry.Do(ctx, op)
 	return resp, err
@@ -1474,22 +1498,17 @@ func (e *matchingEngineImpl) errIfShardOwnershipLost(ctx context.Context, taskLi
 		return nil
 	}
 
-	// We have a shard-processor shared by all the task lists with the same name.
-	// For now there is no 1:1 mapping between shards and tasklists. (#tasklists >= #shards)
-	sp, err := e.executor.GetShardProcess(ctx, taskList.GetName())
-	if e.executor.IsOnboardedToSD() {
-		if err != nil {
-			return fmt.Errorf("failed to lookup ownership in SD: %w", err)
-		}
-		if sp == nil {
-			return fmt.Errorf("failed to lookup ownership in SD: shard process is nil")
-		}
-		return nil
-	}
-
 	self, err := e.membershipResolver.WhoAmI()
 	if err != nil {
 		return fmt.Errorf("failed to lookup self im membership: %w", err)
+	}
+
+	newNotOwnedByHostError := func(newOwner string) error {
+		return cadence_errors.NewTaskListNotOwnedByHostError(
+			newOwner,
+			self.Identity(),
+			taskList.GetName(),
+		)
 	}
 
 	if e.isShuttingDown() {
@@ -1499,11 +1518,27 @@ func (e *matchingEngineImpl) errIfShardOwnershipLost(ctx context.Context, taskLi
 			tag.WorkflowTaskListName(taskList.GetName()),
 		)
 
-		return cadence_errors.NewTaskListNotOwnedByHostError(
-			"not known",
-			self.Identity(),
-			taskList.GetName(),
-		)
+		return newNotOwnedByHostError("not known")
+	}
+
+	// Task lists excluded from the ShardDistributor bypass the executor entirely and rely on
+	// the local hash-ring for ownership, so skip the SD-based ownership check for them.
+	if !e.isExcludedFromShardDistributor(taskList.GetName()) {
+		// We have a shard-processor shared by all the task lists with the same name.
+		// For now there is no 1:1 mapping between shards and tasklists. (#tasklists >= #shards)
+		sp, err := e.executor.GetShardProcess(ctx, taskList.GetName())
+		if err != nil {
+			if errors.Is(err, executorclient.ErrShardProcessNotFound) {
+				// The shard is not assigned to this host – treat it as an ownership loss,
+				// not an internal error.
+				return newNotOwnedByHostError("not known")
+			}
+			return fmt.Errorf("failed to lookup ownership in SD: %w", err)
+		}
+		if sp == nil {
+			return newNotOwnedByHostError("not known")
+		}
+		return nil
 	}
 
 	// Defensive check to make sure we actually own the task list
@@ -1514,18 +1549,13 @@ func (e *matchingEngineImpl) errIfShardOwnershipLost(ctx context.Context, taskLi
 	if err != nil {
 		return fmt.Errorf("failed to lookup task list owner: %w", err)
 	}
-
 	if taskListOwner.Identity() != self.Identity() {
 		e.logger.Warn("Request to get tasklist is being rejected because engine does not own this shard",
 			tag.WorkflowDomainID(taskList.GetDomainID()),
 			tag.WorkflowTaskListType(taskList.GetType()),
 			tag.WorkflowTaskListName(taskList.GetName()),
 		)
-		return cadence_errors.NewTaskListNotOwnedByHostError(
-			taskListOwner.Identity(),
-			self.Identity(),
-			taskList.GetName(),
-		)
+		return newNotOwnedByHostError(taskListOwner.Identity())
 	}
 
 	return nil
@@ -1538,6 +1568,15 @@ func (e *matchingEngineImpl) isShuttingDown() bool {
 	default:
 		return false
 	}
+}
+
+// isExcludedFromShardDistributor returns true if the task list should bypass the
+// ShardDistributor and executor, and instead rely on local hash-ring assignment.
+// This applies to short-lived task lists (e.g. sticky or bits task lists whose names
+// contain a UUID) when the corresponding feature flag is enabled.
+func (e *matchingEngineImpl) isExcludedFromShardDistributor(taskListName string) bool {
+	excludeTaskList := membership.TaskListExcludedFromShardDistributor(taskListName, uint64(e.config.PercentageOnboardedToShardManager()), e.config.ExcludeShortLivedTaskListsFromShardManager())
+	return excludeTaskList
 }
 
 func (e *matchingEngineImpl) domainChangeCallback(nextDomains []*cache.DomainCacheEntry) {

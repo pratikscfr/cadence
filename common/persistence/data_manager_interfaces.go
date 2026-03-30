@@ -492,6 +492,8 @@ type (
 		ScheduleID              int64
 		Version                 int64
 		RecordVisibility        bool
+		OriginalTaskList        string
+		OriginalTaskListKind    types.TaskListKind
 	}
 
 	// CrossClusterTaskInfo describes a cross-cluster task
@@ -529,6 +531,7 @@ type (
 		EventID             int64
 		ScheduleAttempt     int64
 		Version             int64
+		TaskList            string
 	}
 
 	// TaskListInfo describes a state of a task list implementation.
@@ -1891,6 +1894,21 @@ func (t *TransferTaskInfo) GetDomainID() string {
 	return t.DomainID
 }
 
+// GetTaskList returns the task list for transfer task
+func (t *TransferTaskInfo) GetTaskList() string {
+	return t.TaskList
+}
+
+// GetOriginalTaskList returns the original task list for transfer task
+func (t *TransferTaskInfo) GetOriginalTaskList() string {
+	return t.OriginalTaskList
+}
+
+// GetOriginalTaskListKind returns the original task list kind for transfer task
+func (t *TransferTaskInfo) GetOriginalTaskListKind() types.TaskListKind {
+	return t.OriginalTaskListKind
+}
+
 // String returns a string representation for transfer task
 func (t *TransferTaskInfo) String() string {
 	return fmt.Sprintf("%#v", t)
@@ -1918,44 +1936,56 @@ func (t *TransferTaskInfo) ToTask() (Task, error) {
 		}, nil
 	case TransferTaskTypeDecisionTask:
 		return &DecisionTask{
-			WorkflowIdentifier: workflowIdentifier,
-			TaskData:           taskData,
-			TargetDomainID:     t.TargetDomainID,
-			TaskList:           t.TaskList,
-			ScheduleID:         t.ScheduleID,
+			WorkflowIdentifier:   workflowIdentifier,
+			TaskData:             taskData,
+			TargetDomainID:       t.TargetDomainID,
+			TaskList:             t.TaskList,
+			ScheduleID:           t.ScheduleID,
+			OriginalTaskList:     t.OriginalTaskList,
+			OriginalTaskListKind: t.OriginalTaskListKind,
 		}, nil
 	case TransferTaskTypeCloseExecution:
 		return &CloseExecutionTask{
 			WorkflowIdentifier: workflowIdentifier,
 			TaskData:           taskData,
+			TaskList:           t.TaskList,
 		}, nil
 	case TransferTaskTypeRecordWorkflowStarted:
 		return &RecordWorkflowStartedTask{
 			WorkflowIdentifier: workflowIdentifier,
 			TaskData:           taskData,
+			TaskList:           t.TaskList,
 		}, nil
 	case TransferTaskTypeResetWorkflow:
 		return &ResetWorkflowTask{
 			WorkflowIdentifier: workflowIdentifier,
 			TaskData:           taskData,
+			TaskList:           t.TaskList,
 		}, nil
 	case TransferTaskTypeRecordWorkflowClosed:
 		return &RecordWorkflowClosedTask{
 			WorkflowIdentifier: workflowIdentifier,
 			TaskData:           taskData,
+			TaskList:           t.TaskList,
 		}, nil
 	case TransferTaskTypeRecordChildExecutionCompleted:
+		targetRunID := t.TargetRunID
+		if t.TargetRunID == TransferTaskTransferTargetRunID {
+			targetRunID = ""
+		}
 		return &RecordChildExecutionCompletedTask{
 			WorkflowIdentifier: workflowIdentifier,
 			TaskData:           taskData,
 			TargetDomainID:     t.TargetDomainID,
 			TargetWorkflowID:   t.TargetWorkflowID,
-			TargetRunID:        t.TargetRunID,
+			TargetRunID:        targetRunID,
+			TaskList:           t.TaskList,
 		}, nil
 	case TransferTaskTypeUpsertWorkflowSearchAttributes:
 		return &UpsertWorkflowSearchAttributesTask{
 			WorkflowIdentifier: workflowIdentifier,
 			TaskData:           taskData,
+			TaskList:           t.TaskList,
 		}, nil
 	case TransferTaskTypeStartChildExecution:
 		return &StartChildExecutionTask{
@@ -1964,26 +1994,37 @@ func (t *TransferTaskInfo) ToTask() (Task, error) {
 			TargetDomainID:     t.TargetDomainID,
 			TargetWorkflowID:   t.TargetWorkflowID,
 			InitiatedID:        t.ScheduleID,
+			TaskList:           t.TaskList,
 		}, nil
 	case TransferTaskTypeCancelExecution:
+		targetRunID := t.TargetRunID
+		if t.TargetRunID == TransferTaskTransferTargetRunID {
+			targetRunID = ""
+		}
 		return &CancelExecutionTask{
 			WorkflowIdentifier:      workflowIdentifier,
 			TaskData:                taskData,
 			TargetDomainID:          t.TargetDomainID,
 			TargetWorkflowID:        t.TargetWorkflowID,
-			TargetRunID:             t.TargetRunID,
+			TargetRunID:             targetRunID,
 			InitiatedID:             t.ScheduleID,
 			TargetChildWorkflowOnly: t.TargetChildWorkflowOnly,
+			TaskList:                t.TaskList,
 		}, nil
 	case TransferTaskTypeSignalExecution:
+		targetRunID := t.TargetRunID
+		if t.TargetRunID == TransferTaskTransferTargetRunID {
+			targetRunID = ""
+		}
 		return &SignalExecutionTask{
 			WorkflowIdentifier:      workflowIdentifier,
 			TaskData:                taskData,
 			TargetDomainID:          t.TargetDomainID,
 			TargetWorkflowID:        t.TargetWorkflowID,
-			TargetRunID:             t.TargetRunID,
+			TargetRunID:             targetRunID,
 			InitiatedID:             t.ScheduleID,
 			TargetChildWorkflowOnly: t.TargetChildWorkflowOnly,
+			TaskList:                t.TaskList,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown task type: %d", t.TaskType)
@@ -2067,6 +2108,11 @@ func (t *TimerTaskInfo) GetDomainID() string {
 	return t.DomainID
 }
 
+// GetTaskList returns the task list for timer task
+func (t *TimerTaskInfo) GetTaskList() string {
+	return t.TaskList
+}
+
 // String returns a string representation for timer task
 func (t *TimerTaskInfo) String() string {
 	return fmt.Sprintf(
@@ -2094,6 +2140,7 @@ func (t *TimerTaskInfo) ToTask() (Task, error) {
 			EventID:            t.EventID,
 			ScheduleAttempt:    t.ScheduleAttempt,
 			TimeoutType:        t.TimeoutType,
+			TaskList:           t.TaskList,
 		}, nil
 	case TaskTypeActivityTimeout:
 		return &ActivityTimeoutTask{
@@ -2102,22 +2149,26 @@ func (t *TimerTaskInfo) ToTask() (Task, error) {
 			TimeoutType:        t.TimeoutType,
 			EventID:            t.EventID,
 			Attempt:            t.ScheduleAttempt,
+			TaskList:           t.TaskList,
 		}, nil
 	case TaskTypeDeleteHistoryEvent:
 		return &DeleteHistoryEventTask{
 			WorkflowIdentifier: workflowIdentifier,
 			TaskData:           taskData,
+			TaskList:           t.TaskList,
 		}, nil
 	case TaskTypeWorkflowTimeout:
 		return &WorkflowTimeoutTask{
 			WorkflowIdentifier: workflowIdentifier,
 			TaskData:           taskData,
+			TaskList:           t.TaskList,
 		}, nil
 	case TaskTypeUserTimer:
 		return &UserTimerTask{
 			WorkflowIdentifier: workflowIdentifier,
 			TaskData:           taskData,
 			EventID:            t.EventID,
+			TaskList:           t.TaskList,
 		}, nil
 	case TaskTypeActivityRetryTimer:
 		return &ActivityRetryTimerTask{
@@ -2125,12 +2176,14 @@ func (t *TimerTaskInfo) ToTask() (Task, error) {
 			TaskData:           taskData,
 			EventID:            t.EventID,
 			Attempt:            t.ScheduleAttempt,
+			TaskList:           t.TaskList,
 		}, nil
 	case TaskTypeWorkflowBackoffTimer:
 		return &WorkflowBackoffTimerTask{
 			WorkflowIdentifier: workflowIdentifier,
 			TaskData:           taskData,
 			TimeoutType:        t.TimeoutType,
+			TaskList:           t.TaskList,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown task type: %d", t.TaskType)
