@@ -541,7 +541,7 @@ func (t *transferQueueProcessorBase) readTasks(
 			InclusiveMinTaskKey: persistence.NewImmediateTaskKey(readLevel.(transferTaskKey).taskID + 1),
 			ExclusiveMaxTaskKey: persistence.NewImmediateTaskKey(maxReadLevel.(transferTaskKey).taskID + 1),
 			PageSize:            t.options.BatchSize(),
-			ShardID:             common.IntPtr(t.shard.GetShardID()),
+			ShardID:             common.Ptr(t.shard.GetShardID()),
 		})
 		return err
 	}

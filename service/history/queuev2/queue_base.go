@@ -312,7 +312,7 @@ func (q *queueBase) updateQueueState(ctx context.Context) {
 				InclusiveMinTaskKey: inclusiveMinTaskKey,
 				ExclusiveMaxTaskKey: exclusiveMaxTaskKey,
 				PageSize:            pageSize,
-				ShardID:             common.IntPtr(q.shard.GetShardID()),
+				ShardID:             common.Ptr(q.shard.GetShardID()),
 			})
 			if err != nil {
 				q.logger.Error("Failed to range complete history tasks", tag.Error(err))

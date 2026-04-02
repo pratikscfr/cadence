@@ -356,7 +356,7 @@ func (s *historyCacheSuite) TestGetOrCreateWorkflowExecution() {
 			mockSetup: func(mockShard *shard.TestContext) {
 				mockShard.GetDomainCache().(*cache.MockDomainCache).EXPECT().GetDomainName(constants.TestDomainID).Return(constants.TestDomainName, nil).Times(1)
 				req := &persistence.GetCurrentExecutionRequest{
-					ShardID:    common.IntPtr(0),
+					ShardID:    common.Ptr(0),
 					DomainID:   constants.TestDomainID,
 					WorkflowID: constants.TestWorkflowID,
 					DomainName: constants.TestDomainName,
@@ -382,7 +382,7 @@ func (s *historyCacheSuite) TestGetOrCreateWorkflowExecution() {
 			mockSetup: func(mockShard *shard.TestContext) {
 				mockShard.GetDomainCache().(*cache.MockDomainCache).EXPECT().GetDomainName(constants.TestDomainID).Return(constants.TestDomainName, nil).Times(1)
 				req := &persistence.GetCurrentExecutionRequest{
-					ShardID:    common.IntPtr(0),
+					ShardID:    common.Ptr(0),
 					DomainID:   constants.TestDomainID,
 					WorkflowID: constants.TestWorkflowID,
 					DomainName: constants.TestDomainName,

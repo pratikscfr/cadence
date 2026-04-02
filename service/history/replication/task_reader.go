@@ -56,7 +56,7 @@ func (r *TaskReader) Read(ctx context.Context, readLevel int64, maxReadLevel int
 		InclusiveMinTaskKey: persistence.NewImmediateTaskKey(readLevel + 1),
 		ExclusiveMaxTaskKey: persistence.NewImmediateTaskKey(maxReadLevel + 1),
 		PageSize:            batchSize,
-		ShardID:             common.IntPtr(r.shardID),
+		ShardID:             common.Ptr(r.shardID),
 	})
 	if err != nil {
 		return nil, false, err

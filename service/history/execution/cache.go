@@ -310,7 +310,7 @@ func (c *cacheImpl) validateWorkflowExecutionInfo(
 			DomainID:   domainID,
 			WorkflowID: execution.GetWorkflowID(),
 			DomainName: domainName,
-			ShardID:    common.IntPtr(c.shard.GetShardID()),
+			ShardID:    common.Ptr(c.shard.GetShardID()),
 		})
 
 		if err != nil {

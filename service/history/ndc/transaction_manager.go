@@ -439,7 +439,7 @@ func (r *transactionManagerImpl) getCurrentWorkflowRunID(
 			DomainID:   domainID,
 			WorkflowID: workflowID,
 			DomainName: domainName,
-			ShardID:    common.IntPtr(r.shard.GetShardID()),
+			ShardID:    common.Ptr(r.shard.GetShardID()),
 		},
 	)
 

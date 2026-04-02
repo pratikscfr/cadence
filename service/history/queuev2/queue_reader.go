@@ -77,7 +77,7 @@ func (r *simpleQueueReader) GetTask(ctx context.Context, req *GetTaskRequest) (*
 		ExclusiveMaxTaskKey: req.Progress.ExclusiveMaxTaskKey,
 		PageSize:            req.PageSize,
 		NextPageToken:       req.Progress.NextPageToken,
-		ShardID:             common.IntPtr(r.shard.GetShardID()),
+		ShardID:             common.Ptr(r.shard.GetShardID()),
 	})
 	if err != nil {
 		return nil, err

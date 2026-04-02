@@ -146,7 +146,7 @@ func (r *dlqHandlerImpl) fetchAndEmitMessageCount(ctx context.Context) error {
 	shardID := strconv.Itoa(r.shard.GetShardID())
 	result := map[string]int64{}
 	for sourceCluster := range r.taskExecutors {
-		request := persistence.GetReplicationDLQSizeRequest{SourceClusterName: sourceCluster, ShardID: common.IntPtr(r.shard.GetShardID())}
+		request := persistence.GetReplicationDLQSizeRequest{SourceClusterName: sourceCluster, ShardID: common.Ptr(r.shard.GetShardID())}
 		response, err := r.shard.GetExecutionManager().GetReplicationDLQSize(ctx, &request)
 		if err != nil {
 			r.logger.Error("failed to get replication DLQ size", tag.Error(err))
@@ -226,7 +226,7 @@ func (r *dlqHandlerImpl) readMessagesWithAckLevel(
 			MaxReadLevel:      lastMessageID + 1,
 			BatchSize:         pageSize,
 			NextPageToken:     pageToken,
-			ShardID:           common.IntPtr(r.shard.GetShardID()),
+			ShardID:           common.Ptr(r.shard.GetShardID()),
 		},
 	)
 	if err != nil {
@@ -274,7 +274,7 @@ func (r *dlqHandlerImpl) PurgeMessages(
 			SourceClusterName:    sourceCluster,
 			InclusiveBeginTaskID: defaultBeginningMessageID + 1,
 			ExclusiveEndTaskID:   lastMessageID + 1,
-			ShardID:              common.IntPtr(r.shard.GetShardID()),
+			ShardID:              common.Ptr(r.shard.GetShardID()),
 		},
 	)
 	if err != nil {
@@ -332,7 +332,7 @@ func (r *dlqHandlerImpl) MergeMessages(
 			SourceClusterName:    sourceCluster,
 			InclusiveBeginTaskID: defaultBeginningMessageID + 1,
 			ExclusiveEndTaskID:   lastMessageID + 1,
-			ShardID:              common.IntPtr(r.shard.GetShardID()),
+			ShardID:              common.Ptr(r.shard.GetShardID()),
 		},
 	)
 	if err != nil {

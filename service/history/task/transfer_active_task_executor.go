@@ -1127,7 +1127,7 @@ func (t *transferActiveTaskExecutor) processResetWorkflow(
 			DomainID:   task.DomainID,
 			WorkflowID: task.WorkflowID,
 			DomainName: domainName,
-			ShardID:    common.IntPtr(t.shard.GetShardID()),
+			ShardID:    common.Ptr(t.shard.GetShardID()),
 		})
 		if err != nil {
 			return err

@@ -292,7 +292,7 @@ func (p *taskProcessorImpl) cleanupAckedReplicationTasks() error {
 				TaskCategory:        persistence.HistoryTaskCategoryReplication,
 				ExclusiveMaxTaskKey: persistence.NewImmediateTaskKey(minAckLevel + 1),
 				PageSize:            pageSize,
-				ShardID:             common.IntPtr(p.shard.GetShardID()),
+				ShardID:             common.Ptr(p.shard.GetShardID()),
 			},
 		)
 		if err != nil {
@@ -579,7 +579,7 @@ func (p *taskProcessorImpl) generateDLQRequest(
 				ScheduledID: taskAttributes.GetScheduledID(),
 			},
 			DomainName: domainName,
-			ShardID:    common.IntPtr(p.shard.GetShardID()),
+			ShardID:    common.Ptr(p.shard.GetShardID()),
 		}, nil
 
 	case types.ReplicationTaskTypeHistoryV2:
@@ -612,7 +612,7 @@ func (p *taskProcessorImpl) generateDLQRequest(
 				Version:      events[0].Version,
 			},
 			DomainName: domainName,
-			ShardID:    common.IntPtr(p.shard.GetShardID()),
+			ShardID:    common.Ptr(p.shard.GetShardID()),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown replication task type")

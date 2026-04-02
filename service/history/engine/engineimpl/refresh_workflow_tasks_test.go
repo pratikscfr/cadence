@@ -99,7 +99,7 @@ func TestRefreshWorkflowTasks(t *testing.T) {
 
 			// GetWorkflowExecution prep
 			getExecReq := &persistence.GetWorkflowExecutionRequest{
-				ShardID:    common.IntPtr(0),
+				ShardID:    common.Ptr(0),
 				DomainID:   constants.TestDomainID,
 				Execution:  tc.execution,
 				DomainName: constants.TestDomainName,
